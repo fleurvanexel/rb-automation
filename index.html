@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>LHC Roomburg - automatische factuur maken</title>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.17.0/xlsx.full.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.9.2/html2pdf.bundle.min.js"></script>
+        <style id="dynamic-css">
+            * {
+                margin: 0;
+                padding: 0;
+                justify-content: center;
+                align-items: center;
+                font-family: 'Poppins', sans-serif;
+            }
+
+            .container {
+                padding: 35px;
+                text-align: center;
+            }
+
+            h1 {
+                text-align: center;
+                margin-top: 30px;
+                margin-bottom: 50px;
+                font-weight: bold;
+                font-size: 21px;
+            }
+
+            .form-container {
+                display: grid;
+                grid-template-columns: auto auto;
+                gap: 10px;
+                align-items: center;
+            }
+
+            .form-group {
+                display: contents;
+            }
+
+            label {
+                font-weight: bold;
+                text-align: right;
+                width: 250px;
+            }
+
+            input[type="file"] {
+                width: 100%;
+                max-width: 400px;
+                padding: 2px;
+                text-align: center;
+            }
+
+            select {
+                width: 100%;
+                max-width: 400px;
+                padding: 5px;
+                text-align: center;
+                border-radius: 5px;
+                border: 1px solid #ccc;
+                outline: none;
+            }
+
+            select:focus {
+                border-color: #007bff;
+                box-shadow: none;
+            }
+
+            #fileOutputContainer {
+                margin-top: 40px;
+                width: 100%;
+                height: auto;
+            }
+
+            .show-output-file {
+                width: 209mm;
+                height: 296mm;
+                box-sizing: border-box;
+                border: 1px solid #000;
+                margin: 0 auto;
+                align-items: start;
+                text-align: left;
+            }
+
+            #download-pdf {
+                margin-bottom: 30px;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>Autoamatisch PDF Sponsor/Leverancier genereren</h1>
+
+            <img id="rb-logo" src="Foto's/Rb-logo.jpg">
+
+            <div class="form-container">
+                <div class="form-group">
+                    <label for="upload-excel">Upload Excel:</label>
+                    <input type="file" id="upload-excel" accept=".xlsx">
+                </div>
+                <div class="form-group">
+                    <label for="select-bedrijf">Selecteer bedrijf:</label>
+                    <select id="select-bedrijf">
+                        <option value="" disabled selected>Selecteer optie</option>
+                        <!-- load other options dynamically -->
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="select-mailadres">Selecteer mailadres:</label>
+                    <select id="select-mailadres">
+                        <option value="" disabled selected>Selecteer optie</option>
+                        <!-- load other options dynamically -->
+                    </select>
+                </div>
+            </div>
+
+            <br>
+            <br>
+            <br>
+
+            <div class="show-output-file">
+                <div class="inside"></div>
+            </div>  
+            
+            <br>
+        
+            <button id="download-pdf">Download as PDF</button>
+
+        </div>
+
+    <script>
+        let bedrijvenEnLeveranciersData;
+
+        document.addEventListener('DOMContentLoaded', () => {
+            // Put Rb-logo in corner right above
+            const logoImage = document.getElementById('rb-logo');
+            if (logoImage) {
+                logoImage.style.height = '150px';
+                logoImage.style.position = 'absolute';
+                logoImage.style.top = '20px';
+                logoImage.style.right = '1px';
+            }      
+
+            // BEGIN: Load data from Excel file
+            const uploadExcel = document.getElementById('upload-excel');
+            let dataFrames = {};
+            
+            uploadExcel.addEventListener('change', (event) => {
+                const file = event.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = function(event) {
+                        const data = event.target.result;
+                        const workbook = XLSX.read(data, { type: 'binary' });
+
+                        const requiredSheets = ["Sponsoren&Leveranciers", "Mailadressen", "HTML structuur factuur", "css", "js"];
+                        const missingSheets = requiredSheets.filter(sheet => !workbook.SheetNames.includes(sheet));
+
+                        if (missingSheets.length > 0) {
+                            alert(`The following required sheets are missing: ${missingSheets.join(', ')}`);
+                            throw new Error('Missing required sheets');
+                        }
+
+                        workbook.SheetNames.forEach(sheetName => {
+                            const worksheet = workbook.Sheets[sheetName];
+                            const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+                            dataFrames[sheetName] = jsonData;
+                        });
+                        
+                        validateData(dataFrames);
+                        populateSelectElements(dataFrames);
+                    };
+                    reader.readAsBinaryString(file);
+                }
+            });
+            
+            function validateData(dataFrames) {
+                const data = dataFrames['Sponsoren&Leveranciers'];
+
+                const requiredHeaders = [
+                    "Bedrijf",
+                    "Contactpersoon",
+                    "Straatnaam",
+                    "Postcode",
+                    "Email",
+                    "Sponsoritem1",
+                    "Bedrag_Sponsoritem1_excl_BTW",
+                    "Sponsoritem2",
+                    "Bedrag_Sponsoritem2_excl_BTW",
+                    "Sponsoritem3",
+                    "Bedrag_Sponsoritem3_excl_BTW",
+                    "BTW 21% (totaal)",
+                    "Bedrag_incl_BTW (totaal)"
+                ];
+
+                // Check if the header row contains the required headers
+                const headers = data[0];
+                const missingHeaders = requiredHeaders.filter(header => !headers.includes(header));
+                if (missingHeaders.length > 0) {
+                    alert(`The following required headers are missing: ${missingHeaders.join(', ')}`);
+                    throw new Error('Missing required headers');
+                }
+
+                data.forEach((row, index) => {
+                    if (index === 0) return; // Skip header row
+
+                    const [
+                        bedrijf,
+                        contactpersoon,
+                        straatnaam,
+                        postcode,
+                        email,
+                        sponsoritem1,
+                        bedragSponsoritem1,
+                        sponsoritem2,
+                        bedragSponsoritem2,
+                        sponsoritem3,
+                        bedragSponsoritem3,
+                        btw,
+                        bedragInclBTW
+                    ] = row;
+
+                    function parseNumber(value) {
+                        if (typeof value === 'string') {
+                            value = value.replace(/\./g, '').replace(/,/g, '.');
+                        }
+                        return parseFloat(value) || 0;
+                    }
+            
+                    // Parse the values
+                    const bedragSponsoritem1Parsed = parseNumber(bedragSponsoritem1);
+                    const bedragSponsoritem2Parsed = parseNumber(bedragSponsoritem2);
+                    const bedragSponsoritem3Parsed = parseNumber(bedragSponsoritem3);
+                    const btwParsed = parseNumber(btw);
+                    const bedragInclBTWParsed = parseNumber(bedragInclBTW);
+
+                    // Check if required fields are filled
+                    if (!bedrijf || !contactpersoon || !straatnaam || !postcode || !email || !sponsoritem1 || !bedragSponsoritem1 || !btw || !bedragInclBTW) {
+                        alert(`Row ${index + 1} is missing required fields.`);
+                        throw new Error('Missing required fields');
+                    }
+
+                    // Check if sponsor item pairs are filled correctly
+                    else if ((sponsoritem1 && !bedragSponsoritem1) || (!sponsoritem1 && bedragSponsoritem1)) {
+                        alert(`Row ${index + 1} has inconsistent Sponsoritem1 and Bedrag_Sponsoritem1_excl_BTW.`);
+                        throw new Error('Inconsistent Sponsoritem1 and Bedrag_Sponsoritem1_excl_BTW');
+                    }
+                    else if ((sponsoritem2 && !bedragSponsoritem2) || (!sponsoritem2 && bedragSponsoritem2)) {
+                        alert(`Row ${index + 1} has inconsistent Sponsoritem2 and Bedrag_Sponsoritem2_excl_BTW.`);
+                        throw new Error('Inconsistent Sponsoritem2 and Bedrag_Sponsoritem2_excl_BTW');
+                    }
+                    else if ((sponsoritem3 && !bedragSponsoritem3) || (!sponsoritem3 && bedragSponsoritem3)) {
+                        alert(`Row ${index + 1} has inconsistent Sponsoritem3 and Bedrag_Sponsoritem3_excl_BTW.`);
+                        throw new Error('Inconsistent Sponsoritem3 and Bedrag_Sponsoritem3_excl_BTW');
+                    }
+                    
+
+                    // Check if sponsor items are filled in order
+                    else if (sponsoritem2 && (!sponsoritem1 || !bedragSponsoritem1)) {
+                        alert(`Row ${index + 1} has Sponsoritem2 filled without Sponsoritem1.`);
+                        throw new Error('Sponsoritem2 filled without Sponsoritem1');
+                    }
+                    else if (sponsoritem3 && (!sponsoritem1 || !bedragSponsoritem1 || !sponsoritem2 || !bedragSponsoritem2)) {
+                        alert(`Row ${index + 1} has Sponsoritem3 filled without Sponsoritem1 and Sponsoritem2.`);
+                        throw new Error('Sponsoritem3 filled without Sponsoritem1 and Sponsoritem2');
+                    }
+
+                    // Check if sum of amounts equals Bedrag_incl_BTW (totaal)
+                    else if ((bedragSponsoritem1Parsed || 0) + (bedragSponsoritem2Parsed || 0) + (bedragSponsoritem3Parsed || 0) + (btwParsed || 0) !== bedragInclBTWParsed) {
+                        alert(`Row ${index + 1} has incorrect total amount calculation.`);
+                        throw new Error('Incorrect total amount calculation');
+                    }
+                });
+            }
+
+            function populateSelectElements(dataFrames) {
+                // Sheet: Sponsoren&Leveranciers
+                bedrijvenEnLeveranciersData = dataFrames['Sponsoren&Leveranciers']
+                bedrijven = bedrijvenEnLeveranciersData.slice(1).map(row => row[0])
+
+                const selectElementBedrijven = document.getElementById('select-bedrijf');
+                bedrijven.forEach(bedrijf => {
+                    const bedrijfWaarde = document.createElement('option');
+                    bedrijfWaarde.value = bedrijf;
+                    bedrijfWaarde.textContent = bedrijf;
+                    selectElementBedrijven.appendChild(bedrijfWaarde);
+                });
+                // -----------------------------------
+
+
+                // Sheet: Mailadressen
+                const mailadressen = dataFrames['Mailadressen']
+
+                const selectElementMailadressen = document.getElementById('select-mailadres');
+                mailadressen.forEach(mailadres => {
+                    const mailadresWaarde = document.createElement('option');
+                    mailadresWaarde.value = mailadres;
+                    mailadresWaarde.textContent = mailadres;
+                    selectElementMailadressen.appendChild(mailadresWaarde);
+                });
+                // -----------------------------------
+
+
+                // Sheet: css
+                const cssSheet = dataFrames['css'];
+                const cssCode = cssSheet.map(row => row.join('')).join('\n');
+                document.getElementById('dynamic-css').innerHTML = cssCode;
+                // -----------------------------------
+
+
+                // Sheet: js
+                const jsSheet = dataFrames['js'];
+                const jsCode = jsSheet.map(row => row.join('')).join('\n');
+                const script = document.createElement('script');
+                script.innerHTML = jsCode;
+                document.body.appendChild(script);
+                // -----------------------------------
+
+
+                // Sheet: HTML structuur
+                const htmlCode = dataFrames['HTML structuur factuur'];
+                const insideFactuur = document.getElementsByClassName('inside')[0];
+                insideFactuur.innerHTML = htmlCode;
+                // -----------------------------------
+
+
+                // BEGIN: Check if all inputs are given by the user
+                const bedrijfGeselecteerd =  document.getElementById('select-bedrijf');
+                bedrijfGeselecteerd.addEventListener('change', checkIfAllValuesSelected);
+
+                const mailadresGeselecteerd =  document.getElementById('select-mailadres');
+                mailadresGeselecteerd.addEventListener('change', checkIfAllValuesSelected);
+
+                function checkIfAllValuesSelected() {
+                    const bedrijfValue = bedrijfGeselecteerd.value;
+                    const mailadresValue = mailadresGeselecteerd.value;
+
+                    if (bedrijfValue && bedrijfValue !== 'Selecteer optie' && mailadresValue && mailadresValue !== 'Selecteer optie') {
+                        displayRowData(bedrijfValue);
+                    }
+                }
+                // END: Check if all inputs are given by the user
+            }
+            // END: Load data from Excel file
+        });
+    </script>
+    </body>
+</html>
